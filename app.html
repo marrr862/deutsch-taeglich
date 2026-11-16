@@ -136,7 +136,11 @@ ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px}
 .badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
 .badge{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:10px;opacity:.55}
 .badge.on{opacity:1;border-color:var(--chalk)}
-.w{cursor:pointer;border-radius:3px}.w:hover{background:color-mix(in srgb,var(--chalk) 35%,transparent)}.w.sel{background:var(--chalk);color:var(--chalk-ink)}
+.w{cursor:pointer;border-radius:3px}
+.w.n{background:color-mix(in srgb,var(--der) 16%,transparent);box-shadow:inset 0 -1.5px 0 color-mix(in srgb,var(--der) 60%,transparent)}
+.w.l1{background:color-mix(in srgb,var(--chalk) 48%,transparent)}.w.l2{background:color-mix(in srgb,var(--chalk) 20%,transparent)}
+.lg{display:inline-block;padding:0 6px;border-radius:4px;font-size:12px}
+.wstats{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.w:hover{background:color-mix(in srgb,var(--chalk) 35%,transparent)}.w.sel{background:var(--chalk);color:var(--chalk-ink)}
 #pop{position:fixed;z-index:50;max-width:min(340px,calc(100vw - 24px));background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:8px;font-size:15px}
 #pop[hidden]{display:none}#pop .pw{font-size:19px;font-weight:700}#pop .row button{padding:6px 10px;font-size:13px}
 .subs{max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:6px 12px;background:var(--bg);scroll-behavior:smooth}
@@ -179,6 +183,7 @@ new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 <script>
 /* ===================== Локальная версия: данные встроены в файл ===================== */
 const OFFLINE = !!window.__DATA;
+let WST = null;
 const SYK = "dt-sync-key";
 const SY = { on: false, key: "", last: 0, busy: false, err: "", timer: null };
 let PAIR = null;
@@ -923,7 +928,7 @@ const TABS = [["heute","Сегодня"],["woerter","Слова"],["frage","Сл
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const LS = "deutsch-taeglich-v1";
-const blank = () => ({ ts: 0, theme: "", w: {}, custom: [], days: {}, gram: {}, seen: {}, texts: [], v: {}, best: {}, cnt: {}, gx: {}, ex: {}, qa: [], gd: {} });
+const blank = () => ({ ts: 0, theme: "", w: {}, custom: [], days: {}, gram: {}, seen: {}, texts: [], v: {}, best: {}, cnt: {}, gx: {}, ex: {}, qa: [], gd: {}, kn: {} });
 let S = blank();
 try { const raw = localStorage.getItem(LS); if (raw) S = Object.assign(blank(), JSON.parse(raw)); } catch (e) {}
 
@@ -943,6 +948,7 @@ function streak() {
 let docRef = null, pushTimer = null, writing = false, dirty = false;
 function setSync(t) { $("#sync").textContent = t; }
 function save() {
+  WST = null;
   S.ts = Date.now();
   try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {}
   if (docRef) { clearTimeout(pushTimer); pushTimer = setTimeout(push, 1200); }
@@ -1257,8 +1263,10 @@ function vLesen() {
     <div class="card"><h2 lang="de">${esc(it.t)}</h2><div class="small muted">${it.lvl} · ${esc(it.cat || "")} · ${wordsOf(it)} слов</div>
       <div class="row"><button class="${playing ? "live" : "pri"}" data-act="rdplay" data-id="${it.id}">${playing ? "Стоп" : "Слушать текст"}</button>
         <button data-act="rdloop" data-id="${it.id}" aria-pressed="${loop}" class="${loop ? "warn" : ""}">${loop ? "Автоповтор включён" : "Автоповтор"}</button></div>
-      <p class="small muted">Нажмите на любое слово — появится перевод. «RU» переводит весь абзац.</p>
+      <p class="small muted">Нажмите на любое слово — перевод и кнопки «Знаю» / «Учить». <span class="lg w n">Синим</span> — новые слова, <span class="lg w l1">жёлтым</span> — те, что вы учите. «RU» переводит весь абзац.</p>
+      ${wordStats(it.id)}
       ${body}
+      <div class="row"><button data-act="allknown" data-id="${it.id}">Все оставшиеся синие слова — знаю</button><span class="small muted">Отмечайте, когда дочитали: так подсветка со временем останется только на действительно новых словах.</span></div>
       <div class="small"><b>Слова:</b> ${esc(it.v)}</div>
       ${it.q.map(([q, opts, ok], i) => { const k = "rd" + it.id + i, ans = ui.ans[k];
         return `<div class="q"><b lang="de">${esc(q)}</b><div class="opts">${opts.map((o, j) => `<button data-act="rdans" data-k="${k}" data-j="${j}" lang="de" ${ans != null ? "disabled" : ""} class="${ans != null && j === ok ? "right" : ans === j ? "wrong" : ""}">${esc(o)}</button>`).join("")}</div></div>`; }).join("")}
@@ -1605,7 +1613,7 @@ function vStatistik() {
     <div class="small">Очки начисляются за выученные слова и глаголы, грамматику, тексты, записи, экзамены и каждый день занятий. До уровня ${s.lvl + 1}: ${s.to - s.xp}.</div>
     <div class="bar" style="margin-top:8px;background:rgba(255,255,255,.25)"><i style="width:${(s.xp - s.from) / (s.to - s.from) * 100}%;background:var(--chalk)"></i></div></div></div>
   <div class="card"><h2>Итоги</h2><div class="stat-grid">
-    ${[[s.st, "дней подряд"], [s.best, "лучшая серия"], [s.active, "дней занятий"], [s.learned, "слов выучено"], [s.verbs, "глаголов"], [s.gramDone + "/" + GRAMMAR.length, "тем грамматики"], [S.texts.length, "текстов написано"], [s.read, "текстов прочитано"], [s.audio, "записей пройдено"], [s.examPass, "модулей экзамена сдано"]]
+    ${[[s.st, "дней подряд"], [s.best, "лучшая серия"], [s.active, "дней занятий"], [s.learned, "слов выучено"], [s.verbs, "глаголов"], [s.gramDone + "/" + GRAMMAR.length, "тем грамматики"], [S.texts.length, "текстов написано"], [s.read, "текстов прочитано"], [Object.keys(S.kn || {}).length, "знакомых слов в текстах"], [s.audio, "записей пройдено"], [s.examPass, "модулей экзамена сдано"]]
       .map(([n, t]) => `<div><b>${n}</b><span class="small muted">${t}</span></div>`).join("")}</div></div>
   <div class="card"><h2>Календарь занятий</h2><p class="small muted">Последние 16 недель. Чем темнее клетка, тем больше заданий из плана на день выполнено.</p>${heatmap()}</div>
   <div class="card"><h2>Слова за 30 дней</h2>${bars30()}</div>
@@ -1624,7 +1632,34 @@ function vStatistik() {
 
 /* ---------- Перевод по нажатию на слово ---------- */
 const WRE = /([A-Za-zÄÖÜäöüß]+(?:-[A-Za-zÄÖÜäöüß]+)*)/;
-const wz = t => String(t ?? "").split(WRE).map((x, i) => i % 2 ? `<span class="w">${x}</span>` : esc(x)).join("");
+const COMMON = new Set(("der die das den dem des ein eine einen einem einer eines und oder aber denn sondern doch ich du er sie es wir ihr mich dich sich uns euch mir dir ihm ihn ihnen " +
+  "mein meine meinen meinem meiner dein deine sein seine seinen seinem seiner unser unsere euer eure ihre ihren ihrem ihrer nicht kein keine keinen keinem keiner ja nein auch noch schon nur sehr so wie als " +
+  "wenn dass ob weil da dann hier dort jetzt heute immer nie oft mal man was wer wo wann warum wohin woher welche welcher welches dieser diese dieses diesen diesem in im an am auf aus bei mit nach von vom zu " +
+  "zum zur für um über unter vor hinter neben zwischen durch gegen ohne bis seit ist sind war waren bin bist hat habe hast haben hatte hatten wird werden wurde wurden kann können konnte muss müssen musste " +
+  "will wollen soll sollen darf dürfen möchte gibt alle alles viel viele mehr gut etwas nichts also gern gerne ganz wieder herr frau ins ans aufs beim vielen dank bitte danke hallo").split(" "));
+function wstat(f) {
+  const k = f.toLowerCase(); if (!WST) WST = new Map(); if (WST.has(k)) return WST.get(k);
+  let st = "n";
+  if (S.kn && S.kn[k]) st = "";
+  else {
+    let best = -1;
+    for (const h of lexFind(f)) { const r = h.id ? S.w[h.id] : S.v["v:" + h.de]; if (r) best = Math.max(best, r.b || 0); else if (h.id && S.custom.some(c => c.id === h.id)) best = Math.max(best, 0); }
+    st = best >= 3 ? "" : best >= 1 ? "l2" : best === 0 ? "l1" : (COMMON.has(k) || k.length < 2) ? "" : "n";
+  }
+  WST.set(k, st); return st;
+}
+try { if (localStorage.getItem("dt-hl") === "0") ui.hl = false; } catch (e) {}
+const hlOn = () => ui.hl !== false;
+const wz = t => String(t ?? "").split(WRE).map((x, i) => i % 2 ? `<span class="w${hlOn() ? " " + wstat(x) : ""}">${x}</span>` : esc(x)).join("");
+function recolor() { WST = null; document.querySelectorAll(".w").forEach(el => { el.classList.remove("n", "l1", "l2"); if (hlOn()) { const st = wstat(el.textContent); if (st) el.classList.add(st); } }); const c = document.getElementById("wst"); if (c && ui.rdOpen) c.outerHTML = wordStats(ui.rdOpen); }
+function textForms(it) { const m = new Map(); for (const l of it.lines) for (const x of l.t.split(WRE).filter((_, i) => i % 2)) m.set(x.toLowerCase(), x); return [...m.values()]; }
+function wordStats(id) {
+  const it = rdItems().find(x => x.id === id); if (!it) return "";
+  const f = textForms(it), c = { n: 0, l1: 0, l2: 0, k: 0 }; for (const x of f) { const st = wstat(x); if (st) c[st]++; else c.k++; }
+  const pct = Math.round(c.n / Math.max(1, f.length) * 100);
+  return `<div id="wst" class="wstats small"><span><b>${c.n}</b> новых (${pct}%)</span><span class="lg w n">новое</span><span class="lg w l1">учу: ${c.l1}</span><span class="lg w l2">почти выучено: ${c.l2}</span><span class="muted">знакомых: ${c.k}</span>
+    <button class="pb" data-act="hl">${hlOn() ? "Подсветка: вкл" : "Подсветка: выкл"}</button></div>`;
+}
 const TRK = "dt-tr-v1";
 let TRC = {}; try { TRC = JSON.parse(localStorage.getItem(TRK) || "{}"); } catch (e) {}
 const trSave = () => { try { const k = Object.keys(TRC); if (k.length > 3000) k.slice(0, 1000).forEach(x => delete TRC[x]); localStorage.setItem(TRK, JSON.stringify(TRC)); } catch (e) {} };
@@ -1662,9 +1697,12 @@ function popHtml(st) {
   const ai = st.ai ? `<div><span class="small muted">${st.local.length ? "В этом тексте:" : "Перевод:"}</span> <b>${esc(st.ai.ru)}</b>${st.ai.lemma && st.ai.lemma.toLowerCase() !== st.word.toLowerCase() ? ` <span class="small muted" lang="de">← ${esc(st.ai.lemma)}</span>` : ""}${st.ai.gram ? `<div class="small muted">${esc(st.ai.gram)}</div>` : ""}</div>`
     : st.busy ? `<div class="small muted">Перевожу в контексте…</div>` : st.err ? `<div class="small muted">${esc(st.err)}</div>` : "";
   const canAdd = st.ai && st.ai.lemma && !allWords().some(w => w.id.toLowerCase() === st.ai.lemma.replace(/^(der|die|das)\s+/i, "").toLowerCase());
-  return `<div class="pw" lang="de">${esc(st.word)}</div>${loc}${ai}
-    <div class="row"><button data-act="say" data-t="${esc(st.word)}">Слушать</button>${canAdd ? `<button class="pri" data-act="popadd">В карточки</button>` : st.added ? `<span class="pill ok">Добавлено</span>` : ""}
-    <button data-act="popask">Подробнее</button></div>`;
+  const ws = wstat(st.word), lbl = { n: "новое слово", l1: "учу", l2: "почти выучено", "": "знакомое" }[ws];
+  const localNew = st.local.find(h => h.id && !S.w[h.id]);
+  return `<div class="row"><span class="pw grow" lang="de">${esc(st.word)}</span><span class="lg w ${ws}">${lbl}</span></div>${loc}${ai}
+    <div class="row">${ws !== "" ? `<button data-act="popknow">Знаю</button>` : `<button data-act="popunknow">Не знаю</button>`}
+      ${localNew ? `<button class="pri" data-act="poplearn">Учить</button>` : canAdd ? `<button class="pri" data-act="popadd">Учить</button>` : st.added ? `<span class="pill ok">В карточках</span>` : ""}
+      <button data-act="say" data-t="${esc(st.word)}">Слушать</button><button data-act="popask">Подробнее</button></div>`;
 }
 let popSt = null;
 async function openPop(el) {
@@ -2002,9 +2040,16 @@ document.addEventListener("click", e => {
   if (a === "impno") { ui.imp = null; return render(); }
   if (a === "keysave") { const v = ($("#api-key").value || "").trim(); if (!v) return; try { localStorage.setItem(AIKEY, v); } catch (e) {} localAI(); ui.setNote = sample ? "Ключ сохранён, ИИ включён." : "Не удалось включить ИИ."; return render(); }
   if (a === "keydel") { try { localStorage.removeItem(AIKEY); } catch (e) {} sample = null; ui.setNote = "Ключ удалён."; return render(); }
+  if (a === "popknow" || a === "popunknow") { const st = popSt; if (!st) return; const k = st.word.toLowerCase(); S.kn = S.kn || {};
+    if (a === "popknow") { S.kn[k] = 1; const t = dayNum(); for (const h of st.local) if (h.id && S.w[h.id] && (S.w[h.id].b || 0) < 3) S.w[h.id] = { b: 5, d: t + 30 }; }
+    else delete S.kn[k];
+    save(); recolor(); popEl.innerHTML = popHtml(st); return; }
+  if (a === "poplearn") { const st = popSt; if (!st) return; const h = st.local.find(h => h.id && !S.w[h.id]); if (!h) return; S.w[h.id] = { b: 0, d: dayNum() }; if (S.kn) delete S.kn[st.word.toLowerCase()]; st.added = true; save(); recolor(); popEl.innerHTML = popHtml(st); return; }
+  if (a === "hl") { ui.hl = !hlOn(); try { localStorage.setItem("dt-hl", ui.hl ? "1" : "0"); } catch (e) {} recolor(); const bb = document.querySelector('[data-act="hl"]'); if (bb) bb.textContent = hlOn() ? "Подсветка: вкл" : "Подсветка: выкл"; return; }
+  if (a === "allknown") { const it = rdItems().find(x => x.id === b.dataset.id); if (!it) return; S.kn = S.kn || {}; let n = 0; for (const x of textForms(it)) if (wstat(x) === "n") { S.kn[x.toLowerCase()] = 1; n++; } save(); recolor(); b.textContent = n ? `Отмечено как знакомые: ${n}` : "Новых слов не осталось"; b.disabled = true; return; }
   if (a === "popadd") { const st = popSt; if (!st || !st.ai) return; const m = /^(der|die|das)\s+(.+)$/i.exec(st.ai.lemma), de = (m ? m[2] : st.ai.lemma).trim(), art = m ? m[1].toLowerCase() : "";
     if (de && !allWords().some(w => w.id.toLowerCase() === de.toLowerCase())) { S.custom.push({ id: de, art, de, ru: st.ai.ru, ex: st.sent.slice(0, 140) }); save(); LIDX = null; }
-    st.added = true; popEl.innerHTML = popHtml(st); return; }
+    st.added = true; if (S.kn) delete S.kn[st.word.toLowerCase()]; save(); recolor(); popEl.innerHTML = popHtml(st); return; }
   if (a === "popask") { const st = popSt; if (!st) return; closePop(); location.hash = "#frage"; const q = `Слово «${st.ai && st.ai.lemma || st.word}» в предложении «${st.sent}»: значение здесь, управление, с чем сочетается, примеры.`; setTimeout(() => qaAsk(q), 60); return; }
   if (a === "trline") return trLine(b.dataset.t);
   if (a === "ausub") { ui.subs = !ui.subs; return render(); }
@@ -2280,7 +2325,7 @@ function mergeState(a, b) {
     const pick = !x ? y : !y ? x : ((x.d || 0) > (y.d || 0) || ((x.d || 0) === (y.d || 0) && (x.b || 0) >= (y.b || 0))) ? x : y; R[k][id] = Object.assign({}, pick, (x && x.l) || (y && y.l) ? { l: mx(x && x.l, y && y.l) } : {}); } }
   R.days = {}; for (const d of new Set([...Object.keys(A.days || {}), ...Object.keys(B.days || {})])) { const x = (A.days || {})[d] || {}, y = (B.days || {})[d] || {}; R.days[d] = {}; for (const t of new Set([...Object.keys(x), ...Object.keys(y)])) R.days[d][t] = mx(x[t], y[t]); }
   for (const k of ["gram", "cnt", "gd"]) { R[k] = {}; for (const id of new Set([...Object.keys(A[k] || {}), ...Object.keys(B[k] || {})])) R[k][id] = mx((A[k] || {})[id], (B[k] || {})[id]); }
-  R.seen = Object.assign({}, A.seen, B.seen);
+  R.seen = Object.assign({}, A.seen, B.seen); R.kn = Object.assign({}, A.kn, B.kn);
   R.gx = {}; for (const id of new Set([...Object.keys(A.gx || {}), ...Object.keys(B.gx || {})])) { const x = (A.gx || {})[id], y = (B.gx || {})[id]; R.gx[id] = !x ? y : !y ? x : (x.n >= y.n ? x : y); }
   R.best = {}; for (const id of new Set([...Object.keys(A.best || {}), ...Object.keys(B.best || {})])) { const x = (A.best || {})[id], y = (B.best || {})[id]; R.best[id] = x == null ? y : y == null ? x : id === "pairs" ? Math.min(x, y) : Math.max(x, y); }
   R.ex = {}; for (const id of new Set([...Object.keys(A.ex || {}), ...Object.keys(B.ex || {})])) { const x = (A.ex || {})[id] || {}, y = (B.ex || {})[id] || {}; R.ex[id] = {};
