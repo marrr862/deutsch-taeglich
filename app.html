@@ -930,7 +930,7 @@ const TABS = [["heute","Сегодня"],["woerter","Слова"],["frage","Сл
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const LS = "deutsch-taeglich-v1";
-const blank = () => ({ ts: 0, theme: "", w: {}, custom: [], days: {}, gram: {}, seen: {}, texts: [], v: {}, best: {}, cnt: {}, gx: {}, ex: {}, qa: [], gd: {}, kn: {}, cj: {}, sc: [], scdel: {}, fused: {}, wdone: {}, frz: 0 });
+const blank = () => ({ ts: 0, theme: "", w: {}, custom: [], days: {}, gram: {}, seen: {}, texts: [], v: {}, best: {}, cnt: {}, gx: {}, ex: {}, qa: [], gd: {}, kn: {}, cj: {}, sc: [], scdel: {}, fused: {}, wdone: {}, frz: 0, ai: [], aidel: {} });
 let S = blank();
 try { const raw = localStorage.getItem(LS); if (raw) S = Object.assign(blank(), JSON.parse(raw)); } catch (e) {}
 
@@ -1433,8 +1433,56 @@ const READ_LINKS = [
  ["Deutsch perfekt", "A2–C1", "Журнал для изучающих немецкий: часть статей на сайте открыта бесплатно.", "https://www.deutsch-perfekt.com"],
  ["Goethe-Institut: Onleihe", "A1–C1", "Бесплатная электронная библиотека Goethe-Institut: книги, комиксы и журналы. Найдите раздел «Onleihe» на сайте.", "https://www.goethe.de"]
 ];
-const RDS = [["art", "Статьи"], ["story", "Рассказы"], ["comic", "Комиксы"], ["links", "Где читать ещё"]];
+const RDS = [["art", "Статьи"], ["mine", "Под меня"], ["story", "Рассказы"], ["comic", "Комиксы"], ["links", "Где читать ещё"]];
+/* ---------- Тексты под слабые места (ИИ) ---------- */
+function weakWords(n = 14) {
+  const byId = new Map(allWords().map(w => [w.id, w])), t = dayNum();
+  const cand = Object.entries(S.w).filter(([, c]) => c && (c.b || 0) <= 2).map(([id, c]) => ({ w: byId.get(id), sc: (c.l || 0) * 3 + (c.d <= t ? 2 : 0) + (2 - (c.b || 0)) })).filter(x => x.w);
+  cand.sort((a, b) => b.sc - a.sc);
+  const out = cand.slice(0, n).map(x => (x.w.art ? x.w.art + " " : "") + x.w.de);
+  for (const c of S.sc.slice(-20).reverse()) { if (out.length >= n + 4) break; if (!out.some(o => o.toLowerCase().endsWith(c.w.toLowerCase()))) out.push(c.w); }
+  return out;
+}
+const aiItem = x => ({ id: x.id, t: x.t, lvl: x.lvl, cat: "Под меня", kind: "Текст от ИИ", v: x.v, note: x.note, focus: x.focus, lines: x.p.map(t => ({ s: "A", t })), q: x.q.map(q => [q.q, q.o, q.a]) });
+async function aiText() {
+  if (ui.aiBusy) return;
+  if (!sample) { ui.aiNote = noAI; return render(); }
+  const lvl = ui.aiLvl || "B1", len = { short: "220–280", mid: "350–450", long: "600–750" }[ui.aiLen || "mid"];
+  const topic = (($("#ai-tt") || {}).value || "").trim().slice(0, 200);
+  const words = ui.aiNoW ? [] : weakWords(), gram = ui.aiNoG ? [] : weakGram(2).filter(g => gScore(g.id) != null || true).slice(0, 2);
+  ui.aiBusy = true; ui.aiNote = ""; render();
+  const prompt = `Ты — автор учебных текстов по немецкому для русскоязычной ученицы. Напиши ОРИГИНАЛЬНЫЙ связный текст на немецком уровня ${lvl}, ${len} слов, на тему: ${topic || "интересная история или статья из жизни в Германии — выбери сам, не банально"}.
+${words.length ? `Естественно используй в тексте ВСЕ эти слова и выражения (можно в нужной грамматической форме), каждое минимум один раз: ${words.join("; ")}.` : ""}
+${gram.length ? `Включи много естественных примеров на эти темы грамматики (не меньше 5 на каждую): ${gram.map(g => g.t).join("; ")}.` : ""}
+Текст должен быть интересным, с сюжетом или аргументацией, лексика и грамматика строго по уровню ${lvl}. Разбей на 4–8 абзацев.
+Ответь только JSON-объектом: {"t": "заголовок по-немецки", "p": ["абзац", ...], "v": "8–10 ключевых слов текста в формате 'das Wort — перевод' через '; '", "q": [ровно 6 вопросов на понимание: {"q": "вопрос или утверждение по-немецки", "o": ["вариант", ...] — 3 варианта или ["Richtig","Falsch"], "a": индекс верного}], "used": [слова из списка, которые реально вошли в текст], "note": "по-русски 1–3 предложения: какие грамматические конструкции из заданных тем есть в тексте, с 2–3 примерами из текста"}`;
+  try {
+    const r = await sample.json(prompt, { cache: false });
+    const p = (Array.isArray(r.p) ? r.p : []).map(x => String(x).trim()).filter(Boolean).slice(0, 12);
+    const q = (Array.isArray(r.q) ? r.q : []).filter(x => x && Array.isArray(x.o) && x.o.length >= 2 && Number.isInteger(+x.a) && +x.a >= 0 && +x.a < x.o.length).slice(0, 8).map(x => ({ q: String(x.q).slice(0, 300), o: x.o.map(o => String(o).slice(0, 200)), a: +x.a }));
+    if (p.length < 2) throw { code: "refused" };
+    const x = { id: "ai-" + scId(), d: today(), t: String(r.t || "Mein Text").slice(0, 120), lvl, p, q, v: String(r.v || "").slice(0, 600), note: String(r.note || "").slice(0, 600),
+      focus: { words: (Array.isArray(r.used) ? r.used : words).map(String).slice(0, 20), gram: gram.map(g => g.t) } };
+    S.ai.push(x); S.ai = S.ai.slice(-30); save(); ui.rdOpen = x.id; scrollTo(0, 0);
+  } catch (e) { ui.aiNote = aiCopy(e && e.code); }
+  ui.aiBusy = false; render();
+}
+function aiPanel() {
+  const words = weakWords(), gram = weakGram(2);
+  return `<div class="card"><h2>Новый текст под мои слабые места</h2>
+    <p class="small muted">ИИ напишет оригинальный текст, в который вставит слова, которые вы сейчас учите (сначала те, на которых чаще ошибаетесь), и много примеров грамматики из ваших самых слабых тем. В тексте эти слова будут подсвечены жёлтым.</p>
+    <div class="small"><b>Слова (${words.length}):</b> ${words.length ? `<span lang="de">${words.map(esc).join(", ")}</span>` : `<span class="muted">пока нет — учите слова во вкладке «Слова» или нажимайте «Учить» в текстах</span>`}
+      <label class="small" style="margin-left:6px"><input type="checkbox" id="ai-now" ${ui.aiNoW ? "" : "checked"} style="width:auto"> использовать</label></div>
+    <div class="small"><b>Грамматика:</b> ${gram.map(g => esc(g.t)).join(" · ")}
+      <label class="small" style="margin-left:6px"><input type="checkbox" id="ai-nog" ${ui.aiNoG ? "" : "checked"} style="width:auto"> использовать</label></div>
+    <input id="ai-tt" placeholder="Тема (необязательно): путешествие на поезде, космос, работа в больнице…" autocomplete="off" value="${esc(ui.aiTopic || "")}">
+    <div class="row"><span class="small muted">Уровень:</span><div class="chips">${["B1", "B2", "C1"].map(l => `<button data-act="ail" data-l="${l}" class="${(ui.aiLvl || "B1") === l ? "pri" : ""}">${l}</button>`).join("")}</div>
+      <span class="small muted">Длина:</span><div class="chips">${[["short", "Короткий"], ["mid", "Средний"], ["long", "Длинный"]].map(([k, n]) => `<button data-act="ailen" data-k="${k}" class="${(ui.aiLen || "mid") === k ? "pri" : ""}">${n}</button>`).join("")}</div></div>
+    <div class="row"><button class="pri" data-act="aigen" ${ui.aiBusy ? "disabled" : ""}>${ui.aiBusy ? "Пишу текст… (до минуты)" : "Написать текст"}</button>${ui.aiNote ? `<span class="small muted">${esc(ui.aiNote)}</span>` : ""}</div></div>`;
+}
+
 function rdItems(k = ui.rd) {
+  if (k === "mine") return S.ai.map(aiItem).reverse();
   if (k === "art") return ARTICLES;
   if (k === "story") return AUDIO.filter(a => a.cat === "Рассказы");
   if (k === "comic") return AUDIO.filter(a => wordsOf(a) < 400 && new Set(a.lines.map(l => l.s)).size > 1 && a.cat);
@@ -1458,17 +1506,19 @@ function vLesen() {
       <div class="row"><button class="${playing ? "live" : "pri"}" data-act="rdplay" data-id="${it.id}">${playing ? "Стоп" : "Слушать текст"}</button>
         <button data-act="rdloop" data-id="${it.id}" aria-pressed="${loop}" class="${loop ? "warn" : ""}">${loop ? "Автоповтор включён" : "Автоповтор"}</button></div>
       <p class="small muted">Нажмите на любое слово — перевод и кнопки «Знаю» / «Учить». <span class="lg w n">Синим</span> — новые слова, <span class="lg w l1">жёлтым</span> — те, что вы учите. «RU» переводит весь абзац.</p>
+      ${it.focus ? `<div class="out small">${it.focus.words && it.focus.words.length ? `<div><b>Ваши слова в тексте:</b> <span lang="de">${it.focus.words.map(esc).join(", ")}</span></div>` : ""}${it.focus.gram && it.focus.gram.length ? `<div><b>Грамматика:</b> ${it.focus.gram.map(esc).join(" · ")}</div>` : ""}${it.note ? `<div>${esc(it.note)}</div>` : ""}</div>` : ""}
       ${wordStats(it.id)}
       ${body}
       <div class="row"><button data-act="allknown" data-id="${it.id}">Все оставшиеся синие слова — знаю</button><span class="small muted">Отмечайте, когда дочитали: так подсветка со временем останется только на действительно новых словах.</span></div>
       <div class="small"><b>Слова:</b> ${esc(it.v)}</div>
       ${it.q.map(([q, opts, ok], i) => { const k = "rd" + it.id + i, ans = ui.ans[k];
         return `<div class="q"><b lang="de">${esc(q)}</b><div class="opts">${opts.map((o, j) => `<button data-act="rdans" data-k="${k}" data-j="${j}" lang="de" ${ans != null ? "disabled" : ""} class="${ans != null && j === ok ? "right" : ans === j ? "wrong" : ""}">${esc(o)}</button>`).join("")}</div></div>`; }).join("")}
-      <div class="row"><button class="${read ? "" : "pri"}" data-act="rddone" data-id="${it.id}">${read ? "Прочитано ✓ (снять отметку)" : "Отметить как прочитанное"}</button></div></div>`;
+      <div class="row"><button class="${read ? "" : "pri"}" data-act="rddone" data-id="${it.id}">${read ? "Прочитано ✓ (снять отметку)" : "Отметить как прочитанное"}</button>${ui.rd === "mine" ? `<button data-act="aidel" data-id="${it.id}">Удалить текст</button>` : ""}</div></div>`;
   }
   const pool = all.filter(a => !ui.rdLvl || a.lvl.includes(ui.rdLvl)), todo = pool.filter(a => !S.cnt["r:" + a.id]), fin = pool.filter(a => S.cnt["r:" + a.id]);
   const row = a => `<div class="vrow"><div class="row"><div class="grow"><b lang="de">${esc(a.t)}</b><div class="small muted">${a.lvl} · ${esc(a.cat || "")} · ${wordsOf(a)} слов · около ${Math.max(1, Math.round(wordsOf(a) / 90))} мин чтения</div></div>
     <button class="${S.cnt["r:" + a.id] ? "" : "pri"}" data-act="rdopen" data-id="${a.id}">${S.cnt["r:" + a.id] ? "Перечитать" : "Читать"}</button></div></div>`;
+  if (ui.rd === "mine") return head + tabs + aiPanel() + (all.length ? `<div class="card"><h2>Мои тексты</h2>${all.map(row).join("")}</div>` : "");
   const intro = { art: "Статьи и комментарии на бытовые и экзаменационные темы, с вопросами на понимание. Все тексты написаны для этого приложения.", story: "Длинные рассказы с сюжетом: читайте как книгу по одной истории за вечер. Каждый можно ещё и слушать.", comic: "Короткие диалоги в виде комикса: реплики в облачках, по две на кадр. Рисунки условные." }[ui.rd];
   return head + tabs + `<p class="muted">${intro}</p>
     <div class="row"><span class="small muted">Уровень:</span><div class="chips">${[["", "Все"], ["A2", "A2"], ["B1", "B1"], ["B2", "B2"], ["C1", "C1"]].map(([l, n]) => `<button data-act="rdlvl" data-l="${l}" class="${ui.rdLvl === l ? "pri" : ""}">${n}</button>`).join("")}</div>
@@ -2228,6 +2278,10 @@ document.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const a = b.dataset.act;
   if (a === "exp") return void exportProgress();
+  if (a === "aigen") { ui.aiTopic = (($("#ai-tt") || {}).value || ""); return void aiText(); }
+  if (a === "ail") { ui.aiTopic = (($("#ai-tt") || {}).value || ""); ui.aiLvl = b.dataset.l; return render(); }
+  if (a === "ailen") { ui.aiTopic = (($("#ai-tt") || {}).value || ""); ui.aiLen = b.dataset.k; return render(); }
+  if (a === "aidel") { const id = b.dataset.id; S.ai = S.ai.filter(x => x.id !== id); S.aidel[id] = 1; ui.rdOpen = null; save(); return render(); }
   if (a === "wgedit") { ui.wgEdit = !ui.wgEdit; return render(); }
   if (a === "wgm" || a === "wgp") { const g = WG.find(x => x[0] === b.dataset.k); S.wg = S.wg || {}; const v = wgGoal(g[0]) + (a === "wgp" ? g[5] : -g[5]); S.wg[g[0]] = Math.max(g[3], Math.min(g[4], v)); save(); return render(); }
   if (a === "popsc") { const st = popSt; if (!st) return; st.sc = scAdd(st.sent, st.word, st.src) || "dup"; popEl.innerHTML = popHtml(st); return; }
@@ -2419,6 +2473,8 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   if (e.target.id === "mv-file" && e.target.files[0]) { const f = e.target.files[0]; if (MV.url) URL.revokeObjectURL(MV.url); MV.url = URL.createObjectURL(f); MV.name = f.name; MV.cur = -1; return render(); }
   if (e.target.id === "mv-sub" && e.target.files[0]) { const f = e.target.files[0]; f.text().then(t => { MV.cues = parseSubs(t); MV.subName = f.name; MV.cur = -1; const box = document.getElementById("mv-cue"); if (box) { box.innerHTML = mvCueHtml(); const lab = document.querySelector('label[for="mv-sub"]'); if (lab) lab.textContent = "Другие субтитры"; } else render(); mvTick(); }); return; }
+  if (e.target.id === "ai-now") { ui.aiNoW = !e.target.checked; return; }
+  if (e.target.id === "ai-nog") { ui.aiNoG = !e.target.checked; return; }
   if (e.target.id === "imp-file" && e.target.files[0]) { e.target.files[0].text().then(t => { try { const x = JSON.parse(t); if (x.app !== "deutsch-taeglich" || !x.state) throw 0; ui.imp = x; ui.setNote = ""; } catch (er) { ui.imp = null; ui.setNote = "Это не файл прогресса Deutsch Täglich."; } render(); }); return; }
   if (e.target.id === "au-cat") { ui.auCat = e.target.value; ui.auMore = 10; return render(); }
   if (e.target.id === "scene-sel" && e.target.value !== "" && !ui.chatBusy) { const i = +e.target.value; return startScene("s" + i, SCENES[i][0], SCENES[i][1]); }
@@ -2565,6 +2621,8 @@ function mergeState(a, b) {
     for (const part of new Set([...Object.keys(x), ...Object.keys(y)])) { const p = x[part], q = y[part], last = !p ? q : !q ? p : (String(p.d) >= String(q.d) ? p : q); R.ex[id][part] = Object.assign({}, last, { best: mx(p && p.best, q && q.best) }); } }
   const uni = (xs, ys, key, n) => { const m = new Map(); for (const it of [...(xs || []), ...(ys || [])]) m.set(key(it), it); const out = [...m.values()]; return n ? out.slice(-n) : out; };
   R.custom = uni(A.custom, B.custom, w => String(w.id).toLowerCase());
+  R.aidel = Object.assign({}, A.aidel, B.aidel);
+  R.ai = uni(A.ai, B.ai, x => x.id).filter(x => !R.aidel[x.id]).sort((x, y) => String(x.d).localeCompare(String(y.d))).slice(-30);
   R.scdel = Object.assign({}, A.scdel, B.scdel); R.fused = Object.assign({}, A.fused, B.fused); R.wdone = Object.assign({}, A.wdone, B.wdone);
   { const m = new Map(); for (const c of [...(A.sc || []), ...(B.sc || [])]) { const o = m.get(c.id); if (!o || ((c.fs && c.fs.last) || 0) > ((o.fs && o.fs.last) || 0) || (!o.ru && c.ru)) m.set(c.id, Object.assign({}, o, c, { ru: c.ru || (o && o.ru) || "" })); }
     R.sc = [...m.values()].filter(c => !R.scdel[c.id]); }
