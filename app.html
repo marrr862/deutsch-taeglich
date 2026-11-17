@@ -140,7 +140,9 @@ ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px}
 .w.n{background:color-mix(in srgb,var(--der) 16%,transparent);box-shadow:inset 0 -1.5px 0 color-mix(in srgb,var(--der) 60%,transparent)}
 .w.l1{background:color-mix(in srgb,var(--chalk) 48%,transparent)}.w.l2{background:color-mix(in srgb,var(--chalk) 20%,transparent)}
 .lg{display:inline-block;padding:0 6px;border-radius:4px;font-size:12px}
-.wstats{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.w:hover{background:color-mix(in srgb,var(--chalk) 35%,transparent)}.w.sel{background:var(--chalk);color:var(--chalk-ink)}
+.wstats{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.gap{display:inline-block;min-width:70px;border-bottom:2px solid var(--chalk);color:var(--chalk);text-align:center;font-weight:700}
+.cloze{font-size:21px;line-height:1.5;text-align:center}.w:hover{background:color-mix(in srgb,var(--chalk) 35%,transparent)}.w.sel{background:var(--chalk);color:var(--chalk-ink)}
 #pop{position:fixed;z-index:50;max-width:min(340px,calc(100vw - 24px));background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:8px;font-size:15px}
 #pop[hidden]{display:none}#pop .pw{font-size:19px;font-weight:700}#pop .row button{padding:6px 10px;font-size:13px}
 .subs{max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:6px 12px;background:var(--bg);scroll-behavior:smooth}
@@ -928,7 +930,7 @@ const TABS = [["heute","Сегодня"],["woerter","Слова"],["frage","Сл
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const LS = "deutsch-taeglich-v1";
-const blank = () => ({ ts: 0, theme: "", w: {}, custom: [], days: {}, gram: {}, seen: {}, texts: [], v: {}, best: {}, cnt: {}, gx: {}, ex: {}, qa: [], gd: {}, kn: {}, cj: {} });
+const blank = () => ({ ts: 0, theme: "", w: {}, custom: [], days: {}, gram: {}, seen: {}, texts: [], v: {}, best: {}, cnt: {}, gx: {}, ex: {}, qa: [], gd: {}, kn: {}, cj: {}, sc: [], scdel: {} });
 let S = blank();
 try { const raw = localStorage.getItem(LS); if (raw) S = Object.assign(blank(), JSON.parse(raw)); } catch (e) {}
 
@@ -1082,6 +1084,51 @@ function forecast() {
   return { days, avg, n: cards.length };
 }
 
+/* ---------- Карточки из предложений (с пропуском) ---------- */
+const scId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function scAdd(sent, word, src) {
+  sent = String(sent || "").replace(/\s+/g, " ").trim().slice(0, 320); word = String(word || "").trim();
+  if (!sent || !word || !sent.toLowerCase().includes(word.toLowerCase())) return null;
+  if (S.sc.some(c => c.s === sent && c.w.toLowerCase() === word.toLowerCase())) return "dup";
+  const c = { id: scId(), s: sent, w: word, ru: "", src: String(src || "").slice(0, 80), d: today() };
+  S.sc.push(c); save();
+  if (sample) sample(`Переведи на естественный русский язык, без пояснений и кавычек:\n${sent}`, { cache: false, modelTier: "quick" })
+    .then(r => { const x = S.sc.find(y => y.id === c.id); if (x) { x.ru = r.text.trim().slice(0, 400); save(); } }, () => {});
+  return c;
+}
+function scCloze(c, reveal) {
+  let done = false;
+  return c.s.split(WRE).map((x, i) => { if (i % 2 && !done && x.toLowerCase() === c.w.toLowerCase()) { done = true; return reveal ? `<b style="color:var(--chalk)">${esc(x)}</b>` : `<span class="gap">${"·".repeat(Math.min(12, x.length))}</span>`; } return esc(x); }).join("");
+}
+const scDue = () => { const t = dayNum(); return S.sc.filter(c => !c.fs || c.fs.d <= t).sort((a, b) => (a.fs ? recall(a.fs, t) : 2) - (b.fs ? recall(b.fs, t) : 2)); };
+function vSentences() {
+  const due = scDue(), r = ui.scr;
+  if (r && r.on) {
+    const c = S.sc.find(x => x.id === r.id);
+    if (!c) { ui.scr = null; return vSentences(); }
+    const st = { [c.id]: c.fs }, res = r.res;
+    return `<div class="card"><div class="row"><h2 class="grow">Карточки из предложений</h2><span class="pill">к повторению: ${due.length}</span><button class="pb" data-act="scquit">Закончить</button></div>
+      <div class="flash"><div class="cloze" lang="de">${scCloze(c, !!res)}</div>
+        ${c.ru ? `<div class="small muted">${esc(c.ru)}</div>` : ""}${c.src ? `<div class="small muted">Источник: ${esc(c.src)}</div>` : ""}
+        ${res ? `<div class="gmsg ${res.ok ? "ok" : "bad"}" lang="de">${res.ok ? "✓ Верно" : "✗ Правильно: " + esc(c.w)}${res.ok || !res.val ? "" : ` · вы написали «${esc(res.val)}»`}</div>
+          <button data-act="say" data-t="${esc(c.s)}">Слушать предложение</button>
+          <div class="small muted">Насколько легко вспомнили?</div>${gradeRow("scg", st, c.id)}`
+        : `<div class="row" style="width:100%"><input class="grow" id="sc-in" lang="de" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Впишите пропущенное слово">
+          <button class="pri" data-act="sccheck">Проверить</button></div>
+          <div class="row"><button data-act="schint">${r.hint ? "Подсказка: " + esc(c.w.slice(0, Math.max(1, Math.ceil(c.w.length / 3)))) + "…" : "Подсказка"}</button><button data-act="sccheck" data-skip="1">Не знаю</button></div>`}</div></div>`;
+  }
+  return `<div class="card"><div class="row"><h2 class="grow">Карточки из предложений</h2><span class="pill">${S.sc.length}</span></div>
+    <p class="small muted">Слово лучше запоминается в предложении. Нажмите на слово в любом тексте, субтитрах или видео → «Предложение → карточка»: предложение сохранится, а это слово станет пропуском. Повторение — по тому же умному алгоритму, что и слова.</p>
+    <div class="row"><button class="pri" data-act="scstart" ${due.length ? "" : "disabled"}>${due.length ? `Повторить: ${due.length}` : "На сегодня всё повторено"}</button></div>
+    <details><summary><span>Добавить своё предложение</span></summary>
+      <p class="small muted">Слово для пропуска возьмите в квадратные скобки: <span lang="de">Ich habe heute [leider] keine Zeit.</span></p>
+      <textarea id="sc-own" lang="de" style="min-height:70px" placeholder="Ich freue mich [auf] das Wochenende."></textarea>
+      <div class="row"><button data-act="scown">Добавить</button>${ui.scNote ? `<span class="small muted">${esc(ui.scNote)}</span>` : ""}</div></details>
+    ${S.sc.length ? `<details><summary><span>Все карточки</span><span class="muted small">${S.sc.length}</span></summary>
+      ${S.sc.slice().reverse().map(c => `<div class="vrow"><div class="row"><div class="grow" lang="de">${scCloze(c, true)}${c.ru ? `<div class="small muted" lang="ru">${esc(c.ru)}</div>` : ""}</div>
+        <span class="small muted">${c.fs ? "через " + ivLabel(Math.max(0, c.fs.d - dayNum())) : "новая"}</span><button class="pb" data-act="scdel" data-id="${c.id}" aria-label="Удалить карточку">✕</button></div></div>`).join("")}</details>` : ""}</div>`;
+}
+
 function queue() {
   const t = dayNum(), all = allWords();
   const due = all.filter(w => S.w[w.id] && S.w[w.id].d <= t).sort((x, y) => recall(S.w[x.id], t) - recall(S.w[y.id], t));
@@ -1105,7 +1152,8 @@ function vHeute() {
       <a class="btn" href="#${tab}">Открыть</a></div>`; }).join("")}</div></div>
   ${(() => { const tips = [], wg = weakGram(1).filter(g => gScore(g.id) != null && gScore(g.id) < .8)[0];
     if (wg) tips.push(`<div class="task"><div class="grow"><b>Слабая тема: ${esc(wg.t)}</b><div class="small muted">Точность ${Math.round(gScore(wg.id) * 100)}% — десять заданий закрепят её.</div></div><button data-act="gtgo" data-g="${wg.id}">Тренировать</button></div>`);
-    const due = allWords().filter(w => S.w[w.id] && S.w[w.id].d <= dayNum()).length;
+    const due = allWords().filter(w => S.w[w.id] && S.w[w.id].d <= dayNum()).length, scd = scDue().length;
+    if (scd >= 5) tips.push(`<div class="task"><div class="grow"><b>Карточки из предложений: ${scd}</b><div class="small muted">Впишите пропущенные слова в своих предложениях.</div></div><a class="btn" href="#woerter">Повторить</a></div>`);
     if (due >= 15) tips.push(`<div class="task"><div class="grow"><b>Ждут повторения: ${due} слов</b><div class="small muted">Повторите их до новых слов — так они не забудутся.</div></div><a class="btn" href="#woerter">Повторить</a></div>`);
     const E = EXAMS.find(E => E.parts.some(p => !exRes(E.id, p.k)));
     if (E && Object.keys(S.gram).length >= 6) { const p = E.parts.find(p => !exRes(E.id, p.k)); tips.push(`<div class="task"><div class="grow"><b>Пробный экзамен: ${esc(E.t)}</b><div class="small muted">Модуль «${EXP[p.k]}» ещё не пройден, ${p.min} минут.</div></div><a class="btn" href="#pruefung">Открыть</a></div>`); }
@@ -1142,6 +1190,7 @@ function vWoerter() {
       <div>${p.w.map(w => `<div class="vrow"><span lang="de">${artHtml(w)}<b>${esc(w.de)}</b></span> — ${esc(w.ru)}${w.ex ? `<div class="small muted" lang="de">${esc(w.ex)} <button data-act="say" data-t="${esc(w.ex)}">Слушать</button></div>` : ""}</div>`).join("")}
       <p class="small"><a href="${esc(/^https:\/\/t\.me\//.test(p.url) ? p.url : "#woerter")}" target="_blank" rel="noopener">Открыть пост в канале «${esc(p.ch)}»</a></p></div></details>`).join("")}</div>
     ${TG.length > 8 ? `<p class="small muted">Показаны последние 8 постов из ${TG.length}.</p>` : ""}</div>` : ""}
+  ${vSentences()}
   <div class="card"><h2>Темы</h2><div class="themes">${themes}</div></div>
   <div class="card"><h2>Мои слова <span class="muted small">(${S.custom.length})</span></h2>
     <p class="small muted">Записывайте сюда слова из фильмов и разговоров — они попадут в карточки.</p>
@@ -1812,14 +1861,16 @@ function popHtml(st) {
   return `<div class="row"><span class="pw grow" lang="de">${esc(st.word)}</span><span class="lg w ${ws}">${lbl}</span></div>${loc}${ai}
     <div class="row">${ws !== "" ? `<button data-act="popknow">Знаю</button>` : `<button data-act="popunknow">Не знаю</button>`}
       ${localNew ? `<button class="pri" data-act="poplearn">Учить</button>` : canAdd ? `<button class="pri" data-act="popadd">Учить</button>` : st.added ? `<span class="pill ok">В карточках</span>` : ""}
-      <button data-act="say" data-t="${esc(st.word)}">Слушать</button><button data-act="popask">Подробнее</button></div>`;
+      <button data-act="say" data-t="${esc(st.word)}">Слушать</button><button data-act="popask">Подробнее</button></div>
+    <div class="row">${st.sc ? `<span class="pill ok">${st.sc === "dup" ? "Такая карточка уже есть" : "Предложение в карточках"}</span>` : `<button data-act="popsc" title="Сохранить предложение с пропуском на месте этого слова">Предложение → карточка</button>`}</div>`;
 }
 let popSt = null;
 async function openPop(el) {
   if (!popEl) { popEl = document.createElement("div"); popEl.id = "pop"; popEl.setAttribute("role", "dialog"); document.body.appendChild(popEl); }
   closePop(); el.classList.add("sel");
   const word = el.textContent, sent = sentenceOf(el, word), req = ++popReq, key = word.toLowerCase() + "|" + sent.slice(0, 80);
-  popSt = { word, sent, local: lexFind(word), ai: TRC[key] || null, busy: false, err: "", added: false };
+  const srcEl = el.closest(".card"), src = (srcEl && srcEl.querySelector("h2") && srcEl.querySelector("h2").textContent) || (el.closest("#mv-cue") ? MV.name : "") || "";
+  popSt = { word, sent, src, local: lexFind(word), ai: TRC[key] || null, busy: false, err: "", added: false, sc: null };
   const draw = () => { if (req !== popReq) return; popEl.innerHTML = popHtml(popSt); popEl.hidden = false; placePop(el); };
   if (!popSt.ai && sample) popSt.busy = true; else if (!popSt.ai && !popSt.local.length) popSt.err = "Перевода нет в словаре приложения. Перевод в контексте работает, когда приложение открыто в Claude.";
   draw();
@@ -2135,6 +2186,20 @@ document.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const a = b.dataset.act;
   if (a === "exp") return void exportProgress();
+  if (a === "popsc") { const st = popSt; if (!st) return; st.sc = scAdd(st.sent, st.word, st.src) || "dup"; popEl.innerHTML = popHtml(st); return; }
+  if (a === "scstart") { const d = scDue(); if (!d.length) return; ui.scr = { on: true, id: d[0].id, res: null, hint: false }; render(); const inp = $("#sc-in"); if (inp) { inp.focus(); inp.scrollIntoView({ block: "center" }); } return; }
+  if (a === "scquit") { ui.scr = null; return render(); }
+  if (a === "schint") { if (ui.scr) ui.scr.hint = true; render(); const inp = $("#sc-in"); if (inp) inp.focus(); return; }
+  if (a === "sccheck") { const r = ui.scr, c = r && S.sc.find(x => x.id === r.id); if (!c || r.res) return; const v = b.dataset.skip ? "" : (($("#sc-in") || {}).value || "").trim(); if (!v && !b.dataset.skip) return;
+    r.res = { ok: !!v && normAns(v) === normAns(c.w), val: v }; render(); speak(c.s); return; }
+  if (a === "scg") { const r = ui.scr, c = r && S.sc.find(x => x.id === r.id); if (!c) return; const t = dayNum(), g = +b.dataset.g;
+    c.fs = fsrsNext(fsrsCard(c.fs, t), g, t); if (g > 1) bump("words"); save();
+    const d = scDue().filter(x => x.id !== c.id || g === 1); const nx = d.find(x => x.id !== c.id) || (g === 1 ? c : null);
+    ui.scr = nx ? { on: true, id: nx.id, res: null, hint: false } : null; render(); const inp = $("#sc-in"); if (inp) inp.focus(); return; }
+  if (a === "scdel") { const id = b.dataset.id; S.sc = S.sc.filter(c => c.id !== id); S.scdel[id] = 1; save(); return render(); }
+  if (a === "scown") { const raw = (($("#sc-own") || {}).value || "").trim(), m = /\[([^\]]+)\]/.exec(raw);
+    if (!m) { ui.scNote = "Возьмите слово для пропуска в квадратные скобки."; return render(); }
+    const res = scAdd(raw.replace(/\[([^\]]+)\]/, "$1"), m[1], "Моё предложение"); ui.scNote = res === "dup" ? "Такая карточка уже есть." : res ? "Карточка добавлена." : "Не получилось — проверьте предложение."; return render(); }
   if (a === "cjt") { const c = ui.cjc, k = b.dataset.k; c.t = c.t.includes(k) ? c.t.filter(x => x !== k) : c.t.concat(k); if (!c.t.length) c.t = [k]; return render(); }
   if (a === "cjl") { ui.cjc.lvl = b.dataset.l; return render(); }
   if (a === "cjk") { ui.cjc.kind = b.dataset.k; return render(); }
@@ -2320,6 +2385,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") closePop();
   if (e.key === "Enter" && e.target.id === "chat-in") { const t = ui.chatDraft.trim(); if (t && !ui.chatBusy) chatSend(t.slice(0, 1500)); }
   if (e.key === "Enter" && !e.shiftKey && e.target.id === "qa-in") { e.preventDefault(); qaAsk(e.target.value); }
+  if (e.key === "Enter" && e.target.id === "sc-in") { e.preventDefault(); const c = document.querySelector('[data-act="sccheck"]'); if (c) c.click(); }
   if (e.key === "Enter" && e.target.id === "cj-in") { e.preventDefault(); const c = document.querySelector('[data-act="cjcheck"]'); if (c) c.click(); }
   if (e.key === "Enter" && e.target.id === "cj-look") { e.preventDefault(); ui.cjLook = e.target.value.trim().toLowerCase(); render(); }
   if (e.key === "Enter" && e.target.id === "gt-in") { e.preventDefault(); const c = document.querySelector('[data-act="gtcheck"]'); if (c) c.click(); }
@@ -2454,6 +2520,9 @@ function mergeState(a, b) {
     for (const part of new Set([...Object.keys(x), ...Object.keys(y)])) { const p = x[part], q = y[part], last = !p ? q : !q ? p : (String(p.d) >= String(q.d) ? p : q); R.ex[id][part] = Object.assign({}, last, { best: mx(p && p.best, q && q.best) }); } }
   const uni = (xs, ys, key, n) => { const m = new Map(); for (const it of [...(xs || []), ...(ys || [])]) m.set(key(it), it); const out = [...m.values()]; return n ? out.slice(-n) : out; };
   R.custom = uni(A.custom, B.custom, w => String(w.id).toLowerCase());
+  R.scdel = Object.assign({}, A.scdel, B.scdel);
+  { const m = new Map(); for (const c of [...(A.sc || []), ...(B.sc || [])]) { const o = m.get(c.id); if (!o || ((c.fs && c.fs.last) || 0) > ((o.fs && o.fs.last) || 0) || (!o.ru && c.ru)) m.set(c.id, Object.assign({}, o, c, { ru: c.ru || (o && o.ru) || "" })); }
+    R.sc = [...m.values()].filter(c => !R.scdel[c.id]); }
   R.texts = uni(A.texts, B.texts, t => t.d + "|" + String(t.t).slice(0, 60)).sort((x, y) => String(x.d).localeCompare(String(y.d))).slice(-15);
   R.qa = uni(A.qa, B.qa, x => x.d + "|" + x.q).slice(-30);
   R.ts = mx(A.ts, B.ts); return R;
