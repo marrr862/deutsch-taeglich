@@ -1672,7 +1672,7 @@ document.addEventListener("timeupdate", e => { if (e.target && e.target.id === "
 
 /* ---------- Мини-плеер: YouTube и подкасты; остаётся на экране при переходах ---------- */
 let dockEl = null;
-function dockShow(kind, src, title, meta) {
+function dockShow(kind, src, title, meta, ckey) {
   if (!dockEl) { dockEl = document.createElement("div"); dockEl.id = "dock"; document.body.appendChild(dockEl); }
   stopAudio();
   const body = kind === "yt"
@@ -1687,7 +1687,7 @@ function dockShow(kind, src, title, meta) {
   const fr = document.getElementById("dock-yt");
   if (fr) fr.addEventListener("load", () => { try { fr.contentWindow.postMessage(JSON.stringify({ event: "listening", id: "dock" }), "*"); } catch (e) {} });
   const au = document.getElementById("dock-au");
-  if (au) au.addEventListener("ended", () => { const k = "p:" + src; if (!S.cnt[k]) { S.cnt[k] = 1; bump("au"); day().video = 1; save(); if (view === "videos") render(); } });
+  if (au) au.addEventListener("ended", () => { const k = "p:" + (ckey || src); if (!S.cnt[k]) { S.cnt[k] = 1; bump("au"); day().video = 1; save(); if (view === "videos") render(); } });
 }
 /* ---------- Живые видео: подборка и счётчик 10 просмотров ---------- */
 let LIVE = [], dockYt = null, dockEnded = false;
@@ -1762,19 +1762,46 @@ async function podRefresh(p) {
   for (const u of tries) { try { const r = await fetch(u, { cache: "no-store" }); if (!r.ok) continue; const items = parseFeed(await r.text()); if (items.length) { POD[p.u] = items; podLive[p.id] = "ok"; if (view === "videos" || view === "hoeren") render(); return; } } catch (e) {} }
   podLive[p.id] = "snap"; if (view === "videos" || view === "hoeren") render();
 }
+/* ---------- Выпуски, скачанные на Mac (слушать без интернета) ---------- */
+let PODL = { items: {}, loading: {} }, podlTimer = null;
+const podlOn = () => OFFLINE && SY.on;
+async function podlLoad() {
+  if (!podlOn()) return;
+  try { const r = await fetch("/api/pod/list", { headers: { "X-Sync-Key": SY.key }, cache: "no-store" }); if (r.ok) PODL = await r.json(); } catch (e) {}
+  clearTimeout(podlTimer);
+  if (Object.values(PODL.loading || {}).some(v => v === "load")) podlTimer = setTimeout(() => podlLoad().then(() => { if (view === "videos") render(); }), 2500);
+}
+async function podlPost(path, body) {
+  try { await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Sync-Key": SY.key }, body: JSON.stringify(body) }); } catch (e) {}
+  await podlLoad(); if (view === "videos") render();
+}
+const podlSrc = u => { const it = PODL.items[u]; return it ? "/media/" + it.file + "?k=" + encodeURIComponent(SY.key) : null; };
+const mb = n => (n / 1048576).toFixed(n > 10485760 ? 0 : 1) + " МБ";
+function podlBtn(p, x) {
+  if (!podlOn()) return "";
+  if (PODL.items[x.u]) return `<button class="pb" data-act="pdel" data-u="${esc(x.u)}" title="Удалить с Mac">✓ на Mac · ✕</button>`;
+  if ((PODL.loading || {})[x.u] === "load") return `<span class="small muted">скачивается…</span>`;
+  return `<button class="pb" data-act="pdl" data-p="${p.id}" data-u="${esc(x.u)}" title="Скачать на Mac, чтобы слушать без интернета">${(PODL.loading || {})[x.u] === "err" ? "Ошибка, ещё раз ⬇" : "⬇ На Mac"}</button>`;
+}
+
 const durLabel = s => { s = String(s || ""); if (!s) return ""; if (s.includes(":")) { const a = s.split(":").map(Number); const sec = a.reduce((x, y) => x * 60 + y, 0); return Math.max(1, Math.round(sec / 60)) + " мин"; } return Math.max(1, Math.round(+s / 60)) + " мин"; };
 function podView() {
   const open = ui.podOpen && PODS.find(p => p.id === ui.podOpen);
   if (open) podRefresh(open);
+  if (podlOn() && !ui.podlLoaded) { ui.podlLoaded = true; podlLoad().then(() => { if (view === "videos") render(); }); }
+  const dl = Object.entries(PODL.items || {}), dlSize = dl.reduce((a, [, x]) => a + (x.size || 0), 0);
   return `<div class="card"><h2>Подкасты</h2>
-    <p class="small muted">Официальные подкасты для изучающих немецкий: новые выпуски появляются сами. Слушайте в мини-плеере внизу экрана, можно замедлить. Под выпуском — его описание или текст: слова в нём нажимаются для перевода.</p>
+    <p class="small muted">Официальные подкасты для изучающих немецкий: живые дикторы, новые выпуски появляются сами. Слушайте в мини-плеере внизу экрана, можно замедлить. Под выпуском — его описание или текст: слова в нём нажимаются для перевода.${podlOn() ? " Кнопка «⬇ На Mac» скачивает выпуск на ваш Mac — тогда он играет без интернета, и дома на iPhone тоже." : ""}</p>
+    ${podlOn() && dl.length ? `<details ${ui.podlOpen ? "open" : ""} data-podl="1"><summary><span>Скачано на Mac: ${dl.length}</span><span class="muted small">${mb(dlSize)}</span></summary>
+      ${dl.map(([u, x]) => `<div class="ep"><div class="row"><span class="grow" lang="de">${esc(x.t || "Выпуск")}<span class="small muted"> · ${mb(x.size || 0)}</span></span>
+        <button class="pri" data-act="pdplay" data-u="${esc(u)}">Слушать</button><button class="pb" data-act="pdel" data-u="${esc(u)}" aria-label="Удалить с Mac">✕</button></div></div>`).join("")}</details>` : ""}
     ${PODS.map(p => { const items = POD[p.u] || [], isOpen = open === p, heard = items.filter(x => S.cnt["p:" + x.u]).length;
       return `<div class="ep"><div class="row"><div class="grow"><b lang="de">${esc(p.t)}</b> <span class="pill">${p.lvl}</span><div class="small muted">${esc(p.by)} · ${esc(p.d)}</div></div>
         <button data-act="podopen" data-id="${p.id}">${isOpen ? "Свернуть" : `Выпуски${items.length ? " (" + items.length + ")" : ""}`}</button></div>
         ${isOpen ? `${podLive[p.id] === "load" && !items.length ? `<p class="small muted">Загружаю выпуски…</p>` : ""}${!items.length && podLive[p.id] !== "load" ? `<p class="small muted">Не удалось загрузить выпуски. Нужен интернет${p.cors ? "" : " (эту ленту приложение получает через Mac или из сохранённой копии)"}.</p>` : ""}
           ${items.slice(0, ui.podMore || 12).map((x, i) => { const k = "p:" + x.u, xo = ui.podTxt === x.u;
             return `<div class="ep"><div class="row"><div class="grow"><span lang="de">${S.cnt[k] ? "✓ " : ""}${esc(x.t)}</span><div class="small muted">${x.d ? esc(new Date(x.d).toLocaleDateString("ru-RU")) : ""}${x.dur ? " · " + durLabel(x.dur) : ""}</div></div>
-              <button class="pri" data-act="podplay" data-p="${p.id}" data-i="${i}">Слушать</button>${x.x ? `<button class="pb" data-act="podtxt" data-u="${esc(x.u)}">${xo ? "Скрыть" : "Текст"}</button>` : ""}</div>
+              <button class="pri" data-act="podplay" data-p="${p.id}" data-i="${i}">Слушать</button>${podlBtn(p, x)}${x.x ? `<button class="pb" data-act="podtxt" data-u="${esc(x.u)}">${xo ? "Скрыть" : "Текст"}</button>` : ""}</div>
               ${xo ? `<div class="prose" lang="de" style="margin-top:6px"><p>${wz(x.x)}</p></div>${x.l ? `<a class="small" href="${esc(x.l)}" target="_blank" rel="noopener">Страница выпуска</a>` : ""}` : ""}</div>`; }).join("")}
           ${items.length > (ui.podMore || 12) ? `<button data-act="podmore">Ещё выпуски</button>` : ""}
           ${heard ? `<p class="small muted">Прослушано целиком: ${heard}</p>` : ""}` : ""}</div>`; }).join("")}</div>`;
@@ -2427,7 +2454,11 @@ document.addEventListener("click", e => {
   if (a === "podopen") { ui.podOpen = ui.podOpen === b.dataset.id ? null : b.dataset.id; ui.podMore = 12; ui.podTxt = null; return render(); }
   if (a === "podmore") { ui.podMore = (ui.podMore || 12) + 12; return render(); }
   if (a === "podtxt") { ui.podTxt = ui.podTxt === b.dataset.u ? null : b.dataset.u; return render(); }
-  if (a === "podplay") { const p = PODS.find(x => x.id === b.dataset.p), x = (POD[p.u] || [])[+b.dataset.i]; if (x) dockShow("au", x.u, x.t, p.t); return; }
+  if (a === "podplay") { const p = PODS.find(x => x.id === b.dataset.p), x = (POD[p.u] || [])[+b.dataset.i]; if (x) dockShow("au", podlSrc(x.u) || x.u, x.t, p.t, x.u); return; }
+  if (a === "pdplay") { const u = b.dataset.u, x = PODL.items[u]; if (x) dockShow("au", podlSrc(u), x.t || "Выпуск", "", u); return; }
+  if (a === "pdl") { const p = PODS.find(x => x.id === b.dataset.p), u = b.dataset.u, x = (POD[p.u] || []).find(y => y.u === u); PODL.loading = Object.assign({}, PODL.loading, { [u]: "load" }); render();
+    return void podlPost("/api/pod/download", { u, feed: p.u, t: (x ? x.t : "") + " — " + p.t }); }
+  if (a === "pdel") return void podlPost("/api/pod/delete", { u: b.dataset.u });
   if (a === "dkclose") { if (dockEl) { dockEl.hidden = true; dockEl.innerHTML = ""; } return; }
   if (a === "dkmin") { if (dockEl) dockEl.classList.toggle("min"); return; }
   if (a === "dkrate") { const au = document.getElementById("dock-au"); if (au) au.playbackRate = +b.dataset.r; return; }
@@ -2653,7 +2684,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.id === "cj-look") { e.preventDefault(); ui.cjLook = e.target.value.trim().toLowerCase(); render(); }
   if (e.key === "Enter" && e.target.id === "gt-in") { e.preventDefault(); const c = document.querySelector('[data-act="gtcheck"]'); if (c) c.click(); }
 });
-document.addEventListener("toggle", e => { const d = e.target; if (d.dataset && d.dataset.fin) ui.auFin = d.open; if (d.dataset && d.dataset.lvfin) ui.lvFin = d.open; if (d.dataset && d.dataset.ph != null && d.open) ui.phOpen = +d.dataset.ph; if (d.dataset && d.dataset.g) ui.gramOpen = d.open ? d.dataset.g : (ui.gramOpen === d.dataset.g ? null : ui.gramOpen); }, true);
+document.addEventListener("toggle", e => { const d = e.target; if (d.dataset && d.dataset.fin) ui.auFin = d.open; if (d.dataset && d.dataset.podl) ui.podlOpen = d.open; if (d.dataset && d.dataset.lvfin) ui.lvFin = d.open; if (d.dataset && d.dataset.ph != null && d.open) ui.phOpen = +d.dataset.ph; if (d.dataset && d.dataset.g) ui.gramOpen = d.open ? d.dataset.g : (ui.gramOpen === d.dataset.g ? null : ui.gramOpen); }, true);
 
 render();
 fetch("words.json").then(r => r.ok ? r.json() : []).then(extra => {
